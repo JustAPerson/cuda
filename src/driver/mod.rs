@@ -412,6 +412,71 @@ pub unsafe fn deallocate(ptr: *mut u8) -> Result<()> {
     lift(ll::cuMemFree_v2(ptr as u64))
 }
 
+/// Represents a region of device memory
+pub struct Buffer<T>(*mut u8, usize, PhantomData<T>);
+impl<T> Buffer<T> {
+    /// Constructs a new buffer to hold `n` elements
+    pub fn new(n: usize) -> Result<Self> {
+        unsafe {
+            let ptr = allocate(n * mem::size_of::<T>())?;
+            Ok(Buffer(ptr, n, PhantomData))
+        }
+    }
+
+    /// Returns number of elements allocated
+    pub fn len(&self) -> usize {
+        self.1
+    }
+
+    /// Returns number of bytes allocated
+    pub fn size(&self) -> usize {
+        self.1 * mem::size_of::<T>()
+    }
+
+    /// Copies memory from the specified host buffer to the device
+    pub fn copy_from(&self, data: &[T]) -> Result<()> {
+        assert!(data.len() <= self.len());
+        unsafe {
+            copy(
+                data.as_ptr(),
+                self.0 as _,
+                data.len() * mem::size_of::<T>(),
+                Direction::HostToDevice,
+            )
+        }
+    }
+
+    /// Copies memory from device to the specified host buffer
+    pub fn copy_to(&self, data: &mut [T]) -> Result<()> {
+        unsafe {
+            copy(
+                self.0 as _,
+                data.as_mut_ptr(),
+                self.size().min(data.len() * mem::size_of::<T>()),
+                Direction::DeviceToHost,
+            )
+        }
+    }
+}
+
+impl<T: Clone> Buffer<T> {
+    /// Initializes the buffer to this value
+    ///
+    /// Allocates a host-side array of data, then copies
+    pub fn fill(&self, data: T) -> Result<()> {
+        let v = vec![data; self.len()];
+        self.copy_from(&v)
+    }
+}
+
+impl<T> Drop for Buffer<T> {
+    fn drop(&mut self) {
+        unsafe {
+            deallocate(self.0).expect("Could not free");
+        }
+    }
+}
+
 /// Initialize the CUDA runtime
 pub fn initialize() -> Result<()> {
     // TODO expose
