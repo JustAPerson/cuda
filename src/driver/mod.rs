@@ -64,9 +64,7 @@ impl Context {
 
     /// Binds context to the calling thread
     pub fn set_current(&self) -> Result<()> {
-        unsafe {
-            lift(ll::cuCtxSetCurrent(self.handle))
-        }
+        unsafe { lift(ll::cuCtxSetCurrent(self.handle)) }
     }
 
     /// Loads a PTX module
@@ -74,7 +72,10 @@ impl Context {
         let mut handle = ptr::null_mut();
 
         unsafe {
-            lift(ll::cuModuleLoadData(&mut handle, image.as_ptr() as *const _))?
+            lift(ll::cuModuleLoadData(
+                &mut handle,
+                image.as_ptr() as *const _,
+            ))?
         }
 
         Ok(Module {
@@ -152,9 +153,7 @@ impl Device {
     fn get(&self, attr: ll::CUdevice_attribute) -> Result<i32> {
         let mut value = 0;
 
-        unsafe {
-            lift(ll::cuDeviceGetAttribute(&mut value, attr, self.handle))?
-        }
+        unsafe { lift(ll::cuDeviceGetAttribute(&mut value, attr, self.handle))? }
 
         Ok(value)
     }
@@ -171,11 +170,7 @@ impl<'ctx, 'm> Function<'ctx, 'm> {
     ///
     /// NOTE This function blocks until the GPU has finished executing the
     /// kernel
-    pub fn launch(&self,
-                  args: &[&Any],
-                  grid: Grid,
-                  block: Block)
-                  -> Result<()> {
+    pub fn launch(&self, args: &[&Any], grid: Grid, block: Block) -> Result<()> {
         let stream = Stream::new()?;
         // TODO expose
         let shared_mem_bytes = 0;
@@ -183,17 +178,19 @@ impl<'ctx, 'm> Function<'ctx, 'm> {
         let extra = ptr::null_mut();
 
         unsafe {
-            lift(ll::cuLaunchKernel(self.handle,
-                                    grid.x,
-                                    grid.y,
-                                    grid.z,
-                                    block.x,
-                                    block.y,
-                                    block.z,
-                                    shared_mem_bytes,
-                                    stream.handle,
-                                    args.as_ptr() as *mut _,
-                                    extra))?
+            lift(ll::cuLaunchKernel(
+                self.handle,
+                grid.x,
+                grid.y,
+                grid.z,
+                block.x,
+                block.y,
+                block.z,
+                shared_mem_bytes,
+                stream.handle,
+                args.as_ptr() as *mut _,
+                extra,
+            ))?
         }
 
         stream.sync()?;
@@ -237,9 +234,11 @@ impl<'ctx> Module<'ctx> {
         let mut handle = ptr::null_mut();
 
         unsafe {
-            lift(ll::cuModuleGetFunction(&mut handle,
-                                         self.handle,
-                                         name.as_ptr()))?
+            lift(ll::cuModuleGetFunction(
+                &mut handle,
+                self.handle,
+                name.as_ptr(),
+            ))?
         }
 
         Ok(Function {
@@ -373,11 +372,12 @@ pub unsafe fn allocate(n: usize) -> Result<*mut u8> {
 /// Copy `n` bytes of memory from `src` to `dst`
 ///
 /// `direction` indicates where `src` and `dst` are located (device or host)
-pub unsafe fn copy<T>(src: *const T,
-                      dst: *mut T,
-                      count: usize,
-                      direction: Direction)
-                      -> Result<()> {
+pub unsafe fn copy<T>(
+    src: *const T,
+    dst: *mut T,
+    count: usize,
+    direction: Direction,
+) -> Result<()> {
     use self::Direction::*;
 
     let bytes = count * mem::size_of::<T>();
@@ -433,9 +433,7 @@ fn lift(e: ll::CUresult) -> Result<()> {
         CUDA_ERROR_ECC_UNCORRECTABLE => EccUncorrectable,
         CUDA_ERROR_FILE_NOT_FOUND => FileNotFound,
         CUDA_ERROR_HARDWARE_STACK_ERROR => HardwareStackError,
-        CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED => {
-            HostMemoryAlreadyRegistered
-        }
+        CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED => HostMemoryAlreadyRegistered,
         CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED => HostMemoryNotRegistered,
         CUDA_ERROR_ILLEGAL_ADDRESS => IllegalAddress,
         CUDA_ERROR_ILLEGAL_INSTRUCTION => IllegalInstruction,
