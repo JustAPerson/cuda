@@ -134,6 +134,20 @@ impl Device {
         })
     }
 
+    /// Returns the name of the device
+    pub fn name(&self) -> Result<String> {
+        let mut s: Vec<u8> = vec![0; 64];
+        unsafe {
+            lift(ll::cuDeviceGetName(
+                s.as_mut_ptr() as *mut i8,
+                s.len() as i32,
+                self.handle,
+            ))?;
+        }
+        s.retain(|&byte| byte != 0); // throw out nulls
+        Ok(CString::new(s).unwrap().into_string().unwrap())
+    }
+
     /// Returns the maximum number of threads a block can have
     pub fn max_threads_per_block(&self) -> Result<i32> {
         use self::ll::CUdevice_attribute_enum::*;
