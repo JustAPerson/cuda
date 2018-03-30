@@ -2,7 +2,7 @@
 //!
 //! Reference: http://docs.nvidia.com/cuda/cuda-driver-api/
 
-use std::ffi::CStr;
+use std::ffi::CString;
 use std::marker::PhantomData;
 use std::{mem, ptr, result};
 
@@ -68,8 +68,9 @@ impl Context {
     }
 
     /// Loads a PTX module
-    pub fn load_module<'ctx>(&'ctx self, image: &CStr) -> Result<Module<'ctx>> {
+    pub fn load_module<'ctx, T: AsRef<str>>(&'ctx self, image: &T) -> Result<Module<'ctx>> {
         let mut handle = ptr::null_mut();
+        let image = CString::new(image.as_ref()).unwrap();
 
         unsafe {
             lift(ll::cuModuleLoadData(
@@ -230,8 +231,9 @@ pub struct Module<'ctx> {
 
 impl<'ctx> Module<'ctx> {
     /// Retrieves a function from the PTX module
-    pub fn function<'m>(&'m self, name: &CStr) -> Result<Function<'ctx, 'm>> {
+    pub fn function<'m, T: AsRef<str>>(&'m self, name: &T) -> Result<Function<'ctx, 'm>> {
         let mut handle = ptr::null_mut();
+        let name = CString::new(name.as_ref()).unwrap();
 
         unsafe {
             lift(ll::cuModuleGetFunction(
