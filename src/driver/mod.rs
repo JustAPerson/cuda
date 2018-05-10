@@ -304,14 +304,6 @@ pub fn Any<T>(ref_: &T) -> &Any {
     unsafe { &*(ref_ as *const T as *const Any) }
 }
 
-/// `memcpy` direction
-pub enum Direction {
-    /// `src` points to device memory. `dst` points to host memory
-    DeviceToHost,
-    /// `src` points to host memory. `dst` points to device memory
-    HostToDevice,
-}
-
 #[allow(missing_docs)]
 #[derive(Debug)]
 pub enum Error {
@@ -375,51 +367,64 @@ pub enum Error {
     UnsupportedLimit,
 }
 
-// TODO should this be a method of `Context`?
-/// Allocate `n` bytes of memory on the device
-pub unsafe fn allocate(n: usize) -> Result<*mut u8> {
-    let mut d_ptr = 0;
+/// Wrappers around the memory API
+pub mod raw_mem {
+    use super::*;
 
-    lift(ll::cuMemAlloc_v2(&mut d_ptr, n))?;
+    /// `memcpy` direction
+    pub enum Direction {
+        /// `src` points to device memory. `dst` points to host memory
+        DeviceToHost,
+        /// `src` points to host memory. `dst` points to device memory
+        HostToDevice,
+    }
 
-    Ok(d_ptr as *mut u8)
-}
+    // TODO should this be a method of `Context`?
+    /// Allocate `n` bytes of memory on the device
+    pub unsafe fn allocate(n: usize) -> Result<*mut u8> {
+        let mut d_ptr = 0;
 
-/// Copy `n` bytes of memory from `src` to `dst`
-///
-/// `direction` indicates where `src` and `dst` are located (device or host)
-pub unsafe fn copy<T>(
-    src: *const T,
-    dst: *mut T,
-    count: usize,
-    direction: Direction,
-) -> Result<()> {
-    use self::Direction::*;
+        lift(ll::cuMemAlloc_v2(&mut d_ptr, n))?;
 
-    let bytes = count * mem::size_of::<T>();
+        Ok(d_ptr as *mut u8)
+    }
 
-    lift(match direction {
-        DeviceToHost => ll::cuMemcpyDtoH_v2(dst as *mut _, src as u64, bytes),
-        HostToDevice => ll::cuMemcpyHtoD_v2(dst as u64, src as *const _, bytes),
-    })?;
+    // TODO same question as `allocate`
+    /// Free the memory pointed to by `ptr`
+    pub unsafe fn deallocate(ptr: *mut u8) -> Result<()> {
+        lift(ll::cuMemFree_v2(ptr as u64))
+    }
 
-    Ok(())
-}
+    /// Copy `n` bytes of memory from `src` to `dst`
+    ///
+    /// `direction` indicates where `src` and `dst` are located (device or host)
+    pub unsafe fn copy<T>(
+        src: *const T,
+        dst: *mut T,
+        count: usize,
+        direction: Direction,
+    ) -> Result<()> {
+        use self::Direction::*;
 
-// TODO same question as `allocate`
-/// Free the memory pointed to by `ptr`
-pub unsafe fn deallocate(ptr: *mut u8) -> Result<()> {
-    lift(ll::cuMemFree_v2(ptr as u64))
+        let bytes = count * mem::size_of::<T>();
+
+        lift(match direction {
+            DeviceToHost => ll::cuMemcpyDtoH_v2(dst as *mut _, src as u64, bytes),
+            HostToDevice => ll::cuMemcpyHtoD_v2(dst as u64, src as *const _, bytes),
+        })?;
+
+        Ok(())
+    }
 }
 
 /// Represents a region of device memory
-pub struct Buffer<T>(*mut u8, usize, PhantomData<T>);
+pub struct Buffer<T>(usize, usize, PhantomData<T>);
 impl<T> Buffer<T> {
     /// Constructs a new buffer to hold `n` elements
     pub fn new(n: usize) -> Result<Self> {
         unsafe {
-            let ptr = allocate(n * mem::size_of::<T>())?;
-            Ok(Buffer(ptr, n, PhantomData))
+            let ptr = raw_mem::allocate(n * mem::size_of::<T>())?;
+            Ok(Buffer(ptr as usize, n, PhantomData))
         }
     }
 
@@ -433,28 +438,35 @@ impl<T> Buffer<T> {
         self.1 * mem::size_of::<T>()
     }
 
+    /// Returns the device memory address, unusable on host
+    pub fn addr(&self) -> &usize {
+        &self.0
+    }
+
     /// Copies memory from the specified host buffer to the device
     pub fn copy_from(&self, data: &[T]) -> Result<()> {
         assert!(data.len() <= self.len());
         unsafe {
-            copy(
-                data.as_ptr(),
-                self.0 as _,
-                data.len() * mem::size_of::<T>(),
-                Direction::HostToDevice,
-            )
+            // copy(
+            //     data.as_ptr(),
+            //     self.0 as _,
+            //     data.len() * mem::size_of::<T>(),
+            //     Direction::HostToDevice,
+            // )
+            lift(ll::cuMemcpyHtoD_v2(self.0 as _, data.as_ptr() as _, self.size()))
         }
     }
 
     /// Copies memory from device to the specified host buffer
     pub fn copy_to(&self, data: &mut [T]) -> Result<()> {
         unsafe {
-            copy(
-                self.0 as _,
-                data.as_mut_ptr(),
-                self.size().min(data.len() * mem::size_of::<T>()),
-                Direction::DeviceToHost,
-            )
+            // copy(
+            //     self.0 as _,
+            //     data.as_mut_ptr(),
+            //     self.size().min(data.len() * mem::size_of::<T>()),
+            //     Direction::DeviceToHost,
+            // )
+            lift(ll::cuMemcpyDtoH_v2(data.as_mut_ptr() as _, self.0 as _, self.size()))
         }
     }
 }
@@ -472,7 +484,7 @@ impl<T: Clone> Buffer<T> {
 impl<T> Drop for Buffer<T> {
     fn drop(&mut self) {
         unsafe {
-            deallocate(self.0).expect("Could not free");
+            raw_mem::deallocate(self.0 as _).expect("Could not free");
         }
     }
 }
