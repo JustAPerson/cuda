@@ -262,6 +262,49 @@ impl<'ctx> Module<'ctx> {
             _module: PhantomData,
         })
     }
+
+
+    fn get_symbol_info(&self, symbol: impl AsRef<str>) -> Result<(usize, usize)> {
+        let cstr = CString::new(symbol.as_ref()).map_err(|_| Error::InvalidValue)?;
+        let mut ptr = 0;
+        let mut size = 0;
+        unsafe {
+            lift(ll::cuModuleGetGlobal_v2(&mut ptr as *mut usize as _, &mut size as *mut usize as _, self.handle, cstr.as_ptr()))?;
+            Ok((ptr, size))
+        }
+    }
+
+    /// Return the address of the given symbol
+    pub fn get_symbol_address(&self, symbol: impl AsRef<str>) -> Result<usize> {
+        Ok(self.get_symbol_info(symbol)?.0)
+    }
+
+    /// Returns the size of the given symbol
+    pub fn get_symbol_size(&self, symbol: impl AsRef<str>) -> Result<usize> {
+        Ok(self.get_symbol_info(symbol)?.1)
+    }
+
+    /// Set global symbol
+    pub fn set_symbol<T>(&self, symbol: impl AsRef<str>, data: &T) -> Result<()> {
+        let (addr, size)  = self.get_symbol_info(symbol)?;
+        assert!(mem::size_of_val(data) <= size);
+
+        unsafe {
+            lift(ll::cuMemcpyHtoD_v2(addr as u64, data as *const _ as usize as *const _, mem::size_of_val(data)))
+        }
+    }
+
+    /// Reads data stored in global symbol
+    pub fn get_symbol<T: Default>(&self, symbol: impl AsRef<str>) -> Result<Box<T>> {
+        let (addr, size) = self.get_symbol_info(symbol)?;
+        assert!(size >= mem::size_of::<T>());
+
+        let b = Box::new(T::default());
+        unsafe {
+            lift(ll::cuMemcpyDtoH_v2(&*b as *const T as *mut _, addr as u64, mem::size_of::<T>()))?;
+        }
+        Ok(b)
+    }
 }
 
 impl<'ctx> Drop for Module<'ctx> {
