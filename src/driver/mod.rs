@@ -270,13 +270,17 @@ impl<'ctx> Module<'ctx> {
         })
     }
 
-
     fn get_symbol_info(&self, symbol: impl AsRef<str>) -> Result<(usize, usize)> {
         let cstr = CString::new(symbol.as_ref()).map_err(|_| Error::InvalidValue)?;
         let mut ptr = 0;
         let mut size = 0;
         unsafe {
-            lift(ll::cuModuleGetGlobal_v2(&mut ptr as *mut usize as _, &mut size as *mut usize as _, self.handle, cstr.as_ptr()))?;
+            lift(ll::cuModuleGetGlobal_v2(
+                &mut ptr as *mut usize as _,
+                &mut size as *mut usize as _,
+                self.handle,
+                cstr.as_ptr(),
+            ))?;
             Ok((ptr, size))
         }
     }
@@ -293,11 +297,15 @@ impl<'ctx> Module<'ctx> {
 
     /// Set global symbol
     pub fn set_symbol<T>(&self, symbol: impl AsRef<str>, data: &T) -> Result<()> {
-        let (addr, size)  = self.get_symbol_info(symbol)?;
+        let (addr, size) = self.get_symbol_info(symbol)?;
         assert!(mem::size_of_val(data) <= size);
 
         unsafe {
-            lift(ll::cuMemcpyHtoD_v2(addr as u64, data as *const _ as usize as *const _, mem::size_of_val(data)))
+            lift(ll::cuMemcpyHtoD_v2(
+                addr as u64,
+                data as *const _ as usize as *const _,
+                mem::size_of_val(data),
+            ))
         }
     }
 
@@ -308,7 +316,11 @@ impl<'ctx> Module<'ctx> {
 
         let b = Box::new(T::default());
         unsafe {
-            lift(ll::cuMemcpyDtoH_v2(&*b as *const T as *mut _, addr as u64, mem::size_of::<T>()))?;
+            lift(ll::cuMemcpyDtoH_v2(
+                &*b as *const T as *mut _,
+                addr as u64,
+                mem::size_of::<T>(),
+            ))?;
         }
         Ok(b)
     }
@@ -558,7 +570,7 @@ impl<T> Buffer<T> {
     }
 
     /// Construct a buffer from the given iterator
-    pub fn from_iter<I: IntoIterator<Item=T>>(i: I) -> Result<Self> {
+    pub fn from_iter<I: IntoIterator<Item = T>>(i: I) -> Result<Self> {
         let data: Vec<T> = i.into_iter().collect();
         let buffer = Buffer::new(data.len())?;
         buffer.copy_from(&data)?;
@@ -605,8 +617,8 @@ pub fn version() -> Result<i32> {
 pub type Result<T> = result::Result<T, Error>;
 
 fn lift(e: ll::CUresult) -> Result<()> {
-    use self::Error::*;
     use self::ll::cudaError_enum::*;
+    use self::Error::*;
 
     Err(match e {
         CUDA_SUCCESS => return Ok(()),
