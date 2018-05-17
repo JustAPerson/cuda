@@ -2,4 +2,4 @@
 authors = ["Jorge Aparicio <japaricious@gmail.com>"]
 build = "build.rs"
 name = "cuda"
-version = "0.1.0"
+version = "0.2.0"
