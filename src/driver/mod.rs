@@ -477,6 +477,36 @@ impl<T> Buffer<T> {
             ))
         }
     }
+
+    /// Read data into a `Vec<T>`
+    pub fn read_to_vec(&self) -> Result<Vec<T>> {
+        let mut v = Vec::with_capacity(self.len());
+        unsafe {
+            lift(ll::cuMemcpyDtoH_v2(
+                v.as_mut_ptr() as _,
+                self.0 as _,
+                self.size(),
+            ))?;
+            v.set_len(self.len());
+            Ok(v)
+        }
+    }
+
+    /// Construct a buffer from the given iterator
+    pub fn from_slice<S: AsRef<[T]>>(slice: S) -> Result<Self> {
+        let slice = slice.as_ref();
+        let buffer = Buffer::new(slice.len())?;
+        buffer.copy_from(&slice)?;
+        Ok(buffer)
+    }
+
+    /// Construct a buffer from the given iterator
+    pub fn from_iter<I: IntoIterator<Item=T>>(i: I) -> Result<Self> {
+        let data: Vec<T> = i.into_iter().collect();
+        let buffer = Buffer::new(data.len())?;
+        buffer.copy_from(&data)?;
+        Ok(buffer)
+    }
 }
 
 impl<T: Clone> Buffer<T> {
