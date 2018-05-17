@@ -2,6 +2,7 @@
 //!
 //! Reference: http://docs.nvidia.com/cuda/cuda-driver-api/
 
+use std;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::{mem, ptr, result};
@@ -408,6 +409,13 @@ pub enum Error {
     Unknown,
     UnmapFailed,
     UnsupportedLimit,
+}
+
+impl std::error::Error for Error {}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 /// Wrappers around the memory API
