@@ -101,17 +101,16 @@ pub struct Device {
     handle: ll::CUdevice,
 }
 
-/// Binds to the `nth` device
-#[allow(non_snake_case)]
-pub fn Device(nth: u16) -> Result<Device> {
-    let mut handle = 0;
-
-    unsafe { lift(ll::cuDeviceGet(&mut handle, i32::from(nth)))? }
-
-    Ok(Device { handle: handle })
-}
-
 impl Device {
+    /// Binds to the `nth` device
+    pub fn from_index(nth: u16) -> Result<Self> {
+        let mut handle = 0;
+
+        unsafe { lift(ll::cuDeviceGet(&mut handle, i32::from(nth)))? }
+
+        Ok(Device { handle: handle })
+    }
+
     /// Returns the number of available devices
     pub fn count() -> Result<u32> {
         let mut count: i32 = 0;
