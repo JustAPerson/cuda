@@ -166,6 +166,12 @@ impl Device {
         Ok(bytes)
     }
 
+    /// Is the device capable of unified memory (same address between host and device)?
+    pub fn has_unified_memory(&self) -> Result<bool> {
+        use self::ll::CUdevice_attribute_enum::*;
+        Ok(self.get(CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING)? == 1)
+    }
+
     fn get(&self, attr: ll::CUdevice_attribute) -> Result<i32> {
         let mut value = 0;
 
