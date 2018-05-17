@@ -453,7 +453,11 @@ impl<T> Buffer<T> {
             //     data.len() * mem::size_of::<T>(),
             //     Direction::HostToDevice,
             // )
-            lift(ll::cuMemcpyHtoD_v2(self.0 as _, data.as_ptr() as _, self.size()))
+            lift(ll::cuMemcpyHtoD_v2(
+                self.0 as _,
+                data.as_ptr() as _,
+                data.len() * mem::size_of::<T>(),
+            ))
         }
     }
 
@@ -466,7 +470,11 @@ impl<T> Buffer<T> {
             //     self.size().min(data.len() * mem::size_of::<T>()),
             //     Direction::DeviceToHost,
             // )
-            lift(ll::cuMemcpyDtoH_v2(data.as_mut_ptr() as _, self.0 as _, self.size()))
+            lift(ll::cuMemcpyDtoH_v2(
+                data.as_mut_ptr() as _,
+                self.0 as _,
+                self.size().min(data.len() * mem::size_of::<T>()),
+            ))
         }
     }
 }
