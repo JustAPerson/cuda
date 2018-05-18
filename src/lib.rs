@@ -4,4 +4,7 @@
 #![deny(warnings)]
 #![feature(untagged_unions)]
 
+#[macro_use]
+extern crate log;
+
 pub mod driver;

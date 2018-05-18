@@ -3,3 +3,6 @@ authors = ["Jorge Aparicio <japaricious@gmail.com>"]
 build = "build.rs"
 name = "cuda"
 version = "0.2.0"
+
+[dependencies]
+log = "0.4"

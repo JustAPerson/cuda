@@ -5,6 +5,8 @@
 use std;
 use std::ffi::CString;
 use std::marker::PhantomData;
+use std::rc::Rc;
+use std::cell::Cell;
 use std::{mem, ptr, result};
 
 #[allow(dead_code)]
@@ -38,9 +40,11 @@ impl Block {
 }
 
 /// A CUDA "context"
+#[derive(Debug, Clone)]
+pub struct Context(Rc<ContextInner>);
 #[derive(Debug)]
-pub struct Context {
-    defused: bool,
+struct ContextInner {
+    poisoned: Cell<bool>,
     handle: ll::CUcontext,
 }
 
@@ -56,20 +60,20 @@ impl Context {
         if handle.is_null() {
             Ok(None)
         } else {
-            Ok(Some(Context {
-                defused: true,
+            Ok(Some(Context(Rc::new(ContextInner {
+                poisoned: Cell::new(false),
                 handle: handle,
-            }))
+            }))))
         }
     }
 
     /// Binds context to the calling thread
     pub fn set_current(&self) -> Result<()> {
-        unsafe { lift(ll::cuCtxSetCurrent(self.handle)) }
+        unsafe { lift(ll::cuCtxSetCurrent(self.0.handle)) }
     }
 
     /// Loads a PTX module
-    pub fn load_module<'ctx, T: AsRef<str>>(&'ctx self, image: T) -> Result<Module<'ctx>> {
+    pub fn load_module<T: AsRef<str>>(&self, image: T) -> Result<Module> {
         let mut handle = ptr::null_mut();
         let image = CString::new(image.as_ref()).unwrap();
 
@@ -80,16 +84,29 @@ impl Context {
             ))?
         }
 
-        Ok(Module {
+        Ok(Module(Rc::new(ModuleInner{
             handle: handle,
-            _context: PhantomData,
-        })
+            context: self.clone(),
+        })))
+    }
+
+    /// Constructs a plain device-only buffer
+    pub fn buffer(&self) -> BufferBuilder {
+        BufferBuilder { context: self.clone() }
+    }
+
+    fn poison(&self) {
+        self.0.poisoned.set(true);
+    }
+
+    fn poisoned(&self) -> bool {
+        self.0.poisoned.get()
     }
 }
 
-impl Drop for Context {
+impl Drop for ContextInner {
     fn drop(&mut self) {
-        if !self.defused {
+        if !self.poisoned.get() {
             unsafe { lift(ll::cuCtxDestroy_v2(self.handle)).unwrap() }
         }
     }
@@ -128,10 +145,10 @@ impl Device {
 
         unsafe { lift(ll::cuCtxCreate_v2(&mut handle, flags, self.handle))? }
 
-        Ok(Context {
-            defused: false,
+        Ok(Context(Rc::new(ContextInner {
+            poisoned: Cell::new(false),
             handle: handle,
-        })
+        })))
     }
 
     /// Returns the name of the device
@@ -181,12 +198,13 @@ impl Device {
 }
 
 /// A function that the CUDA device can execute. AKA a "kernel"
-pub struct Function<'ctx: 'm, 'm> {
+pub struct Function {
+    name: String,
     handle: ll::CUfunction,
-    _module: PhantomData<&'m Module<'ctx>>,
+    module: Module,
 }
 
-impl<'ctx, 'm> Function<'ctx, 'm> {
+impl Function {
     /// Execute a function on the GPU
     ///
     /// NOTE This function blocks until the GPU has finished executing the
@@ -214,7 +232,15 @@ impl<'ctx, 'm> Function<'ctx, 'm> {
             ))?
         }
 
-        stream.sync()?;
+        let result = stream.sync();
+        if result.is_err() {
+            // launch error is likely sticky, meaning any future API calls will return same error
+            // there's no effective way to ignore it besides destroying the context. However,
+            // we should avoid calling destructors on buffers etc since those will error as well,
+            // leading to confusing errors while unwinding
+            error!("poisoning kernel {}", self.name);
+            self.module.0.context.poison();
+        }
         stream.destroy()
     }
 }
@@ -244,28 +270,31 @@ impl Grid {
 }
 
 /// A PTX module
-pub struct Module<'ctx> {
+#[derive(Clone)]
+pub struct Module(Rc<ModuleInner>);
+struct ModuleInner {
     handle: ll::CUmodule,
-    _context: PhantomData<&'ctx Context>,
+    context: Context,
 }
 
-impl<'ctx> Module<'ctx> {
+impl Module {
     /// Retrieves a function from the PTX module
-    pub fn function<'m, T: AsRef<str>>(&'m self, name: T) -> Result<Function<'ctx, 'm>> {
+    pub fn function<T: AsRef<str>>(&self, name: T) -> Result<Function> {
         let mut handle = ptr::null_mut();
-        let name = CString::new(name.as_ref()).unwrap();
+        let cname = CString::new(name.as_ref()).unwrap();
 
         unsafe {
             lift(ll::cuModuleGetFunction(
                 &mut handle,
-                self.handle,
-                name.as_ptr(),
+                self.0.handle,
+                cname.as_ptr(),
             ))?
         }
 
         Ok(Function {
+            name: name.as_ref().into(),
             handle: handle,
-            _module: PhantomData,
+            module: self.clone(),
         })
     }
 
@@ -277,7 +306,7 @@ impl<'ctx> Module<'ctx> {
             lift(ll::cuModuleGetGlobal_v2(
                 &mut ptr as *mut usize as _,
                 &mut size as *mut usize as _,
-                self.handle,
+                self.0.handle,
                 cstr.as_ptr(),
             ))?;
             Ok((ptr, size))
@@ -325,7 +354,7 @@ impl<'ctx> Module<'ctx> {
     }
 }
 
-impl<'ctx> Drop for Module<'ctx> {
+impl Drop for ModuleInner {
     fn drop(&mut self) {
         unsafe { lift(ll::cuModuleUnload(self.handle)).unwrap() }
     }
@@ -485,30 +514,62 @@ pub mod raw_mem {
     }
 }
 
-/// Represents a region of device memory
-pub struct Buffer<T>(usize, usize, PhantomData<T>);
-impl<T> Buffer<T> {
-    /// Constructs a new buffer to hold `n` elements
-    pub fn new(n: usize) -> Result<Self> {
+/// Represents an unallocated normal buffer
+pub struct BufferBuilder {
+    context: Context,
+}
+impl BufferBuilder {
+    /// Realize this buffer by allocating enough space for `len` objects
+    pub fn alloc<T>(self, len: usize) -> Result<Buffer<T>> {
         unsafe {
-            let ptr = raw_mem::allocate(n * mem::size_of::<T>())?;
-            Ok(Buffer(ptr as usize, n, PhantomData))
+            let ptr = raw_mem::allocate(len * mem::size_of::<T>())?;
+            Ok(Buffer {
+                addr: ptr as usize,
+                len: len,
+                context: self.context,
+                _t: PhantomData,
+            })
         }
     }
 
+    /// Construct a buffer from the given iterator
+    pub fn from_slice<T, S: AsRef<[T]>>(self, slice: S) -> Result<Buffer<T>> {
+        let slice = slice.as_ref();
+        let buffer = self.alloc(slice.len())?;
+        buffer.copy_from(&slice)?;
+        Ok(buffer)
+    }
+
+    /// Construct a buffer from the given iterator
+    pub fn from_iter<T, I: IntoIterator<Item = T>>(self, i: I) -> Result<Buffer<T>> {
+        let data: Vec<T> = i.into_iter().collect();
+        let buffer = self.alloc(data.len())?;
+        buffer.copy_from(&data)?;
+        Ok(buffer)
+    }
+}
+
+/// Represents a region of device memory which can be allocated using the `Context` struct.
+pub struct Buffer<T> {
+    addr: usize,
+    len: usize,
+    context: Context,
+    _t: PhantomData<T>,
+}
+impl<T> Buffer<T> {
     /// Returns number of elements allocated
     pub fn len(&self) -> usize {
-        self.1
+        self.len
     }
 
     /// Returns number of bytes allocated
     pub fn size(&self) -> usize {
-        self.1 * mem::size_of::<T>()
+        self.len * mem::size_of::<T>()
     }
 
     /// Returns the device memory address, unusable on host
-    pub fn addr(&self) -> &usize {
-        &self.0
+    pub fn addr(&self) -> usize {
+        self.addr
     }
 
     /// Copies memory from the specified host buffer to the device
@@ -522,7 +583,7 @@ impl<T> Buffer<T> {
             //     Direction::HostToDevice,
             // )
             lift(ll::cuMemcpyHtoD_v2(
-                self.0 as _,
+                self.addr as _,
                 data.as_ptr() as _,
                 data.len() * mem::size_of::<T>(),
             ))
@@ -540,7 +601,7 @@ impl<T> Buffer<T> {
             // )
             lift(ll::cuMemcpyDtoH_v2(
                 data.as_mut_ptr() as _,
-                self.0 as _,
+                self.addr as _,
                 self.size().min(data.len() * mem::size_of::<T>()),
             ))
         }
@@ -552,28 +613,12 @@ impl<T> Buffer<T> {
         unsafe {
             lift(ll::cuMemcpyDtoH_v2(
                 v.as_mut_ptr() as _,
-                self.0 as _,
+                self.addr as _,
                 self.size(),
             ))?;
             v.set_len(self.len());
             Ok(v)
         }
-    }
-
-    /// Construct a buffer from the given iterator
-    pub fn from_slice<S: AsRef<[T]>>(slice: S) -> Result<Self> {
-        let slice = slice.as_ref();
-        let buffer = Buffer::new(slice.len())?;
-        buffer.copy_from(&slice)?;
-        Ok(buffer)
-    }
-
-    /// Construct a buffer from the given iterator
-    pub fn from_iter<I: IntoIterator<Item = T>>(i: I) -> Result<Self> {
-        let data: Vec<T> = i.into_iter().collect();
-        let buffer = Buffer::new(data.len())?;
-        buffer.copy_from(&data)?;
-        Ok(buffer)
     }
 }
 
@@ -589,8 +634,10 @@ impl<T: Clone> Buffer<T> {
 
 impl<T> Drop for Buffer<T> {
     fn drop(&mut self) {
-        unsafe {
-            raw_mem::deallocate(self.0 as _).expect("Could not free");
+        if !self.context.poisoned() {
+            unsafe {
+                raw_mem::deallocate(self.addr as _).expect("Could not free");
+            }
         }
     }
 }
