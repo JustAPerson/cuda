@@ -363,26 +363,26 @@ impl Module {
         }
     }
 
-    /// Reads data stored in global symbol
-    pub fn get_symbol<T: Default>(&self, symbol: impl AsRef<str>) -> Result<Box<T>> {
+    /// Reads data stored in global symbol. Chose T correctly
+    pub unsafe fn get_symbol<T: Default>(&self, symbol: impl AsRef<str>) -> Result<Box<T>> {
         let (addr, size) = self.get_symbol_info(symbol)?;
         assert!(size >= mem::size_of::<T>());
 
         let b = Box::new(T::default());
-        unsafe {
-            lift(ll::cuMemcpyDtoH_v2(
-                &*b as *const T as *mut _,
-                addr as u64,
-                mem::size_of::<T>(),
-            ))?;
-        }
+        lift(ll::cuMemcpyDtoH_v2(
+            &*b as *const T as *mut _,
+            addr as u64,
+            mem::size_of::<T>(),
+        ))?;
         Ok(b)
     }
 }
 
 impl Drop for ModuleInner {
     fn drop(&mut self) {
-        unsafe { lift(ll::cuModuleUnload(self.handle)).unwrap() }
+        if !self.context.poisoned() {
+            unsafe { lift(ll::cuModuleUnload(self.handle)).unwrap() }
+        }
     }
 }
 
