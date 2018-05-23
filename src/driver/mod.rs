@@ -102,6 +102,32 @@ impl Context {
     fn poisoned(&self) -> bool {
         self.0.poisoned.get()
     }
+
+    /// Sets the maximum heap size useable by kernels in this context.
+    /// Device kernels can use `malloc()` and `free()` to access the heap.
+    pub fn set_heap_size(&self, size: usize) -> Result<()> {
+        unsafe {
+            lift(ll::cuCtxSetLimit(
+                ll::CUlimit_enum::CU_LIMIT_MALLOC_HEAP_SIZE,
+                size,
+            ))
+        }
+    }
+
+    /// Gets the maximum heap size useable by kernels in this context.
+    /// Device kernels can use `malloc()` and `free()` to access the heap.
+    pub fn get_heap_size(&self) -> Result<usize> {
+        let mut size = 0;
+
+        unsafe {
+            lift(ll::cuCtxGetLimit(
+                &mut size,
+                ll::CUlimit_enum::CU_LIMIT_MALLOC_HEAP_SIZE,
+            ))?
+        }
+
+        Ok(size)
+    }
 }
 
 impl Drop for ContextInner {
