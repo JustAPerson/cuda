@@ -3,10 +3,10 @@
 //! Reference: http://docs.nvidia.com/cuda/cuda-driver-api/
 
 use std;
+use std::cell::Cell;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::cell::Cell;
 use std::{mem, ptr, result};
 
 #[allow(dead_code)]
@@ -84,7 +84,7 @@ impl Context {
             ))?
         }
 
-        Ok(Module(Rc::new(ModuleInner{
+        Ok(Module(Rc::new(ModuleInner {
             handle: handle,
             context: self.clone(),
         })))
@@ -92,7 +92,9 @@ impl Context {
 
     /// Constructs a plain device-only buffer
     pub fn buffer(&self) -> BufferBuilder {
-        BufferBuilder { context: self.clone() }
+        BufferBuilder {
+            context: self.clone(),
+        }
     }
 
     fn poison(&self) {
